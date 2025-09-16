@@ -32,6 +32,11 @@
         <v-img :src="item.Imagen" max-width="80" max-height="80" contain />
       </template>
 
+      <template v-slot:item.Precio="{ item }">
+        ${{ item.Precio.toFixed(2) }}
+      </template>
+
+
       <template v-slot:item.actions="{ item }">
         <v-icon small color="blue" class="mr-2" @click="openEditDialog(item)">
           mdi-pencil
@@ -56,6 +61,7 @@
           <v-file-input
             label="Seleccionar Imagen"
             accept="image/*"
+            :multiple="false"
             @change="onFileChange"
             outlined
             dense
@@ -109,10 +115,6 @@
               />
             </template>
 
-            <template v-slot:item.Precio="{ item }">
-              ${{ item.Precio.toFixed(2) }}
-            </template>
-
             <template v-slot:item.subtotal="{ item }">
               ${{ (item.cantidad * item.Precio).toFixed(2) }}
             </template>
@@ -130,6 +132,22 @@
         </v-card-actions>
       </v-card>
     </v-dialog>
+
+     <!-- Dialogo de confirmar recibo -->
+    <v-dialog v-model="dialogConfirmarRecibo" max-width="400px">
+      <v-card>
+        <v-card-title class="headline">Generar recibo</v-card-title>
+        <v-card-text>
+          ¿Desea generar un recibo en PDF de esta venta?
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer></v-spacer>
+          <v-btn color="red" text @click="rechazarRecibo">No</v-btn>
+          <v-btn color="green" text @click="aceptarRecibo">Sí</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
   </v-container>
 </template>
 
@@ -146,9 +164,13 @@ const search = ref("");
 const dialogProducto = ref(false);
 const dialogVenta = ref(false);
 const isEditing = ref(false);
-
+const dialogConfirmarRecibo = ref(false); 
 
 const cliente = ref("");
+
+//Datos temporales de la venta
+const ventaPendiente = ref(null);
+
 
 const headers = [
   { title: "ID", key: "id" },
@@ -180,7 +202,7 @@ const items = reactive([
   {
     id: 3,
     Imagen: "/images/velaMini.jpg",
-    Nombre: "Vela de Miel pequeña",
+    Nombre: "Vela de Miel chica",
     Descripción: "Vela aromatica de miel tamaño pequeño",
     Precio: 15.00,
     Cantidad: 56,
@@ -254,17 +276,20 @@ const deleteItem = (item) => {
 };
 
 //Manejo de subida de archivos
-const onFileChange = (file) => {
-  if (file) {
+const onFileChange = (event) => {
+
+  const file = Array.isArray(event) ? event[0] : event?.target?.files?.[0] || event;
+
+  if (file instanceof File) {
     const reader = new FileReader();
     reader.onload = (e) => {
       editedItem.Imagen = e.target.result; //Base64
     };
     reader.readAsDataURL(file);
+  } else {
+    console.warn("No se recibió un archivo válido:", event);
   }
 };
-
-
 const ventaHeaders = [
   { title: "Nombre", key: "Nombre" },
   { title: "Precio", key: "Precio" },
@@ -282,7 +307,7 @@ const calcularTotal = () => {
   );
 };
 
-//Generar recibo PDF
+//Generar el recibo
 const generarReciboPDF = () => {
   const doc = new jsPDF();
   const fecha = new Date().toLocaleString();
@@ -294,7 +319,6 @@ const generarReciboPDF = () => {
   doc.text(`Fecha: ${fecha}`, 14, 30);
   doc.text(`Cliente: ${cliente.value || "N/A"}`, 14, 37);
 
- 
   const productos = ventaItems
     .filter((i) => i.cantidad > 0)
     .map((i) => [
@@ -310,8 +334,6 @@ const generarReciboPDF = () => {
     body: productos,
   });
 
-
-  //Total
   doc.text(
     `Total: $${totalVenta.value.toFixed(2)}`,
     14,
@@ -321,43 +343,63 @@ const generarReciboPDF = () => {
   doc.save(`recibo_${Date.now()}.pdf`);
 };
 
+
 const confirmarVenta = () => {
   if (!cliente.value.trim()) {
     alert("Por favor ingresa el nombre del cliente.");
     return;
   }
 
-
   const vendidos = [...ventaItems]
-    .filter(i => i.cantidad > 0)
-    .map(i => ({ id: i.id, Nombre: i.Nombre, cantidad: i.cantidad }));
+    .filter((i) => i.cantidad > 0)
+    .map((i) => ({ id: i.id, Nombre: i.Nombre, cantidad: i.cantidad }));
 
   if (vendidos.length === 0) {
     alert("Selecciona al menos un producto con cantidad mayor a 0.");
     return;
   }
 
-
+  
   ventaItems.forEach((venta) => {
     const producto = items.find((i) => i.id === venta.id);
     if (producto) producto.Cantidad -= venta.cantidad;
   });
 
 
-  if (confirm("¿Desea generar un recibo en PDF de esta venta?")) {
-    generarReciboPDF();
+  ventaPendiente.value = {
+    items: [...ventaItems],
+    total: totalVenta.value,
+  };
+
+
+  dialogConfirmarRecibo.value = true;
+};
+
+
+const aceptarRecibo = () => {
+  generarReciboPDF();
+  finalizarVenta();
+};
+
+
+const rechazarRecibo = () => {
+  finalizarVenta();
+};
+
+
+const finalizarVenta = () => {
+  if (ventaPendiente.value) {
+    estadisticasStore.registrarVenta(
+      ventaPendiente.value.items,
+      ventaPendiente.value.total
+    );
   }
 
-  estadisticasStore.registrarVenta(ventaItems, totalVenta.value);
-  
-  
-
-  generarReciboPDF();
-
-  //Reset
+  dialogConfirmarRecibo.value = false;
   dialogVenta.value = false;
   cliente.value = "";
   calcularTotal();
+  ventaPendiente.value = null;
 };
 
 
